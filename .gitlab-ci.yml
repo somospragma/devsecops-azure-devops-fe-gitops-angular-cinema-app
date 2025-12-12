@@ -1,0 +1,136 @@
+variables:
+  DOCKER_USERNAME: $DOCKER_USERNAME
+  DOCKER_PASSWORD: $DOCKER_PASSWORD
+  PROJECT_NAME: "cinema-app"
+  
+stages:
+  - continuous-integration
+  - continuous-deployment
+
+install_dependencies:
+  stage: continuous-integration
+  image: node:20
+  script:
+    - npm ci
+  artifacts:
+    paths:
+      - node_modules/
+    expire_in: 1 hour
+
+build_frontend:
+  stage: continuous-integration
+  image: node:20
+  script:
+    - npm install -g @angular/cli
+    - npm run build 
+  needs:
+    - install_dependencies
+  artifacts:
+    paths:
+      - dist/
+    expire_in: 1h
+
+# test_frontend:
+#   stage: test
+#   image: node:20
+#   script:
+#     - npm run test -- --watch=false --browsers=ChromeHeadless
+#   artifacts:
+#     paths:
+#       - coverage/
+#     when: always
+
+get-angular-version:
+  stage: continuous-integration
+  image: node:20 
+  script:
+    - ANGULAR_VERSION=$(node -p "require('./package.json').version")  # Obtener la versión de Angular
+    - echo "$ANGULAR_VERSION" > angular_version.txt  # Guardar solo la versión en el archivo
+  artifacts:
+    paths:
+      - angular_version.txt  # Pasar el archivo con la versión de Angular como artefacto
+  needs:
+    - build_frontend
+  only:
+    - develop
+    - qa
+    - main
+
+push-image:
+  stage: continuous-integration
+  image: docker
+  services:
+    - docker:dind
+  script:
+    - echo "Authenticating with Docker Hub..."
+    - echo $DOCKER_PASSWORD | docker login -u $DOCKER_USERNAME --password-stdin
+    - echo "Building Docker image..."
+    
+    # Leer la versión de Angular desde el artefacto sin prefijos adicionales
+    - ANGULAR_VERSION=$(cat angular_version.txt | xargs)  # Usar `xargs` para eliminar espacios adicionales
+    - echo "$ANGULAR_VERSION"  # Imprimir la versión
+    
+    # Definir el sufijo de versión según el entorno
+    - if [ "$CI_COMMIT_REF_NAME" == "develop" ]; then
+        VERSION_SUFFIX="-SNAPSHOT"; 
+      elif [ "$CI_COMMIT_REF_NAME" == "qa" ]; then
+        VERSION_SUFFIX="-PRERELEASE"; 
+      elif [ "$CI_COMMIT_REF_NAME" == "main" ]; then
+        VERSION_SUFFIX=""; 
+      else
+        VERSION_SUFFIX="-UNKNOWN"; 
+      fi
+
+    - echo "$ANGULAR_VERSION$VERSION_SUFFIX"  # Mostrar la versión correctamente
+
+    # Crear el tag de la imagen
+    - IMAGE_TAG="$DOCKER_USERNAME/$PROJECT_NAME:$ANGULAR_VERSION$VERSION_SUFFIX"
+    - echo "Building image with tag:$IMAGE_TAG"
+    
+    # Construir y etiquetar la imagen Docker
+    - docker build -t $IMAGE_TAG .
+    - docker tag $IMAGE_TAG $DOCKER_USERNAME/$PROJECT_NAME:latest
+
+    # Pushing Docker image to Docker Hub
+    - echo "Pushing Docker image to Docker Hub..."
+    - docker push $IMAGE_TAG
+    - docker push $DOCKER_USERNAME/$PROJECT_NAME:latest
+    - echo $ANGULAR_VERSION$VERSION_SUFFIX > version.txt
+
+  artifacts:
+    paths:
+      - version.txt
+  dependencies:
+    - get-angular-version
+    - build_frontend
+  needs:
+    - get-angular-version
+    - build_frontend   # <--- agregué aquí build_frontend también
+  only:
+    - develop
+    - qa
+    - main
+
+# disparar pipeline gitops chart helm####
+# 🚀 GitOps trigger 
+trigger-gitops:
+  stage: continuous-deployment
+  image: curlimages/curl:latest
+  before_script: []
+  script:
+    - APPLICATION_VERSION=$(cat version.txt)
+    - echo "🔁 Triggering GitOps pipeline with VERSION=$APPLICATION_VERSION..."
+    - |
+      curl --request POST \
+           --form "token=$TRIGGER_TOKEN_GITOPS" \
+           --form "ref=develop" \
+           --form "variables[PROJECT_NAME]=$PROJECT_NAME" \
+           --form "variables[APPLICATION_VERSION]=$APPLICATION_VERSION" \
+           "https://gitlab.com/api/v4/projects/69169423/trigger/pipeline"
+  dependencies:
+    - push-image
+  only:
+    - develop
+    - qa
+    - main
+

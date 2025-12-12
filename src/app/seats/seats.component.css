@@ -1,0 +1,41 @@
+.container {
+    background-color: aliceblue;
+}
+
+.container h2 {
+    text-align: center;
+}
+
+.container .screen {
+    height: 20px;
+    width: 90%;
+    margin: 5%;
+    background: black;
+}
+
+.container {
+  max-width: 600px;
+  margin: auto;
+  text-align: center;
+}
+
+.seats {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}
+
+.seat {
+  padding: 10px;
+  border: 1px solid #ccc;
+  border-radius: 5px;
+}
+
+.available {
+  color: green;
+}
+
+.unavailable {
+  color: red;
+}
